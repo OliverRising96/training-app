@@ -496,6 +496,7 @@ document.addEventListener('touchend', e => {
 
 // ---------- boot ----------------------------------------------------------------
 render(true);
-store.init().then(() => { if (store.role) { ui.role = store.role; ui.locked = true; } render(true); }).catch(e => { $app.innerHTML = header('Sign in') + `<p class="pad">${esc(e.message)}</p>`; });
+store.init().then(() => { if (store.role) { ui.role = store.role; ui.locked = true; } render(true); }).catch(e => { $app.innerHTML = header('Sign in') + `<p class="pad">${esc(e.message)}</p><div class="pad"><p>Or paste your phone link here:</p><textarea id="pairIn" rows="4" style="width:100%;font-size:14px"></textarea><p><button id="pairBtn">Pair</button></p></div>`;
+  document.getElementById('pairBtn').onclick = () => { const v = decodeURIComponent((document.getElementById('pairIn').value || '').trim()); const m = v.match(/#pair=([^|]+)\|([A-Za-z0-9]+)/); if (!m) { alert('That link doesn\'t look right - copy the whole link.'); return; } localStorage.setItem('ta.pair', JSON.stringify({ url: m[1], key: m[2] })); location.replace(location.pathname + '#/train'); location.reload(); }; });
 if ('serviceWorker' in navigator && location.hostname !== '127.0.0.1') navigator.serviceWorker.register('sw.js');
 window.__store = store; window.__ui = ui; window.__applySheet = applySheet;
