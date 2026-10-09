@@ -165,8 +165,8 @@ function sheetsAdapter(cfg) {
 
 export function createStore(cfg) {
   // one-time pairing link from the sheet: https://site/#pair=<execUrl>|<key>
-  const m = location.hash.match(/^#pair=([^|]+)\|(.+)$/);
-  if (m) { localStorage.setItem('ta.pair', JSON.stringify({ url: decodeURIComponent(m[1]), key: decodeURIComponent(m[2]) })); history.replaceState(null, '', location.pathname + '#/train'); }
+  const m = decodeURIComponent(location.hash).match(/^#pair=([^|]+)\|(.+)$/);
+  if (m) { localStorage.setItem('ta.pair', JSON.stringify({ url: m[1], key: m[2] })); history.replaceState(null, '', location.pathname + '#/train'); }
   const a = cfg.backend === 'sheets' ? sheetsAdapter(cfg.sheets || {}) : cfg.backend === 'supabase' ? supabaseAdapter(cfg.supabase) : cfg.backend === 'local' ? localAdapter : devAdapter;
   return new Store(a);
 }
