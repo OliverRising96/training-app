@@ -1,0 +1,172 @@
+// Data layer. Everything is a "doc": {collection, id, data}. Collections:
+//   program    – one doc per training block (coach writes)
+//   meta       – macrocycle overview (coach writes)
+//   logs       – athlete's actual sets, keyed `${itemId}.${groupIndex}` (athlete writes)
+//   sessions   – per-day session info (date, length, RPE) (athlete writes)
+//   bodyweight – one doc per date (athlete writes)
+// The cache lives in localStorage and writes are queued, so the app works offline in the gym
+// and syncs when signal returns.
+const CACHE_KEY = 'ta.cache.v1', QUEUE_KEY = 'ta.queue.v1';
+const COLLS = ['program', 'meta', 'logs', 'sessions', 'bodyweight'];
+
+function emptyState() { const s = {}; COLLS.forEach(c => s[c] = {}); return s; }
+
+class Store {
+  constructor(adapter) {
+    this.adapter = adapter;
+    this.state = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null') || emptyState();
+    this.queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+    this.listeners = []; this.online = true; this.user = null; this.role = null;
+  }
+  on(fn) { this.listeners.push(fn); }
+  emit() { this.listeners.forEach(f => f(this)); }
+  persist() { localStorage.setItem(CACHE_KEY, JSON.stringify(this.state)); localStorage.setItem(QUEUE_KEY, JSON.stringify(this.queue)); }
+  get(c, id) { return this.state[c][id]; }
+  all(c) { return this.state[c]; }
+  async init() {
+    const a = await this.adapter.auth?.();
+    if (a) { this.user = a.user; this.role = a.role; }
+    await this.refresh();
+    this.adapter.subscribe?.(() => this.refresh());
+    window.addEventListener('online', () => this.flush());
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.refresh(); });
+  }
+  async refresh() {
+    await this.flush();
+    try {
+      const docs = await this.adapter.load();
+      const s = emptyState();
+      docs.forEach(d => { if (s[d.collection]) s[d.collection][d.id] = d.data; });
+      // re-apply unsynced local writes on top
+      this.queue.forEach(q => { if (q.data === null) delete s[q.c][q.id]; else s[q.c][q.id] = q.data; });
+      this.state = s; this.online = true;
+    } catch (e) { this.online = false; console.warn('offline – using cache', e); }
+    this.persist(); this.emit();
+  }
+  put(c, id, data) { this.state[c][id] = data; this.enqueue({ c, id, data }); }
+  del(c, id) { delete this.state[c][id]; this.enqueue({ c, id, data: null }); }
+  enqueue(op) {
+    this.queue = this.queue.filter(q => !(q.c === op.c && q.id === op.id)); this.queue.push(op);
+    this.persist(); this.emit(); clearTimeout(this._t); this._t = setTimeout(() => this.flush(), 400);
+  }
+  async flush() {
+    if (this.adapter.putMany && this.queue.length) {
+      const ops = this.queue.slice();
+      try { await this.adapter.putMany(ops); this.queue = this.queue.filter(q => !ops.includes(q)); this.online = true; }
+      catch (e) { this.online = false; }
+      this.persist(); this.emit(); return;
+    }
+    while (this.queue.length) {
+      const op = this.queue[0];
+      try {
+        if (op.data === null) await this.adapter.del(op.c, op.id); else await this.adapter.put(op.c, op.id, op.data);
+        this.queue.shift(); this.online = true;
+      } catch (e) { this.online = false; break; }
+    }
+    this.persist(); this.emit();
+  }
+  get pending() { return this.queue.length; }
+}
+
+// ---- Adapters -------------------------------------------------------------
+const devAdapter = {
+  name: 'Local server',
+  async load() { const r = await fetch('/api/docs'); if (!r.ok) throw new Error(r.status); return r.json(); },
+  async put(c, id, data) { const r = await fetch(`/api/docs/${c}/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }); if (!r.ok) throw new Error(r.status); },
+  async del(c, id) { const r = await fetch(`/api/docs/${c}/${encodeURIComponent(id)}`, { method: 'DELETE' }); if (!r.ok) throw new Error(r.status); },
+};
+
+const localAdapter = {
+  name: 'This device only',
+  async load() {
+    let docs = JSON.parse(localStorage.getItem('ta.localdb') || 'null');
+    if (!docs) { const r = await fetch('seed-docs.json'); docs = r.ok ? await r.json() : []; localStorage.setItem('ta.localdb', JSON.stringify(docs)); }
+    return docs;
+  },
+  async put(c, id, data) { const d = await this.load(); const i = d.findIndex(x => x.collection === c && x.id === id); const doc = { collection: c, id, data }; i >= 0 ? d[i] = doc : d.push(doc); localStorage.setItem('ta.localdb', JSON.stringify(d)); },
+  async del(c, id) { const d = (await this.load()).filter(x => !(x.collection === c && x.id === id)); localStorage.setItem('ta.localdb', JSON.stringify(d)); },
+};
+
+// Supabase: one table `docs` + `members` (see backend/supabase/schema.sql). Login by email magic link.
+function supabaseAdapter(cfg) {
+  let sb;
+  return {
+    name: 'Supabase',
+    async auth() {
+      const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+      sb = createClient(cfg.url, cfg.anonKey);
+      let { data: { session } } = await sb.auth.getSession();
+      if (!session) {
+        const email = prompt('Sign in – enter your email and we\'ll send you a login link');
+        if (email) { await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.href } }); alert('Check your email for the login link.'); }
+        throw new Error('not signed in');
+      }
+      const { data: m } = await sb.from('members').select('role').eq('email', session.user.email).maybeSingle();
+      return { user: session.user.email, role: m?.role || null };
+    },
+    async load() { const { data, error } = await sb.from('docs').select('collection,id,data'); if (error) throw error; return data; },
+    async put(c, id, data) { const { error } = await sb.from('docs').upsert({ collection: c, id, data }); if (error) throw error; },
+    async del(c, id) { const { error } = await sb.from('docs').delete().match({ collection: c, id }); if (error) throw error; },
+    subscribe(cb) { sb.channel('docs').on('postgres_changes', { event: '*', schema: 'public', table: 'docs' }, () => { clearTimeout(this._d); this._d = setTimeout(cb, 500); }).subscribe(); },
+  };
+}
+
+// Google Sheet as the backend, via the Apps Script web app in backend/apps-script/Code.gs.
+// Programme + macrocycle are read from the coach's sheet; results are written into its green columns.
+function sheetsAdapter(cfg) {
+  const pair = JSON.parse(localStorage.getItem('ta.pair') || 'null') || {};
+  const url = pair.url || cfg.url, key = pair.key || cfg.key;
+  let map = { cells: {}, sessCells: {} };
+  const join = a => { const v = a.filter(x => x != null && x !== ''); if (!v.length) return ''; return v.every(x => String(x) === String(v[0])) ? String(v[0]) : v.join(','); };
+  const uk = d => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}/${m[2]}/${m[1]}` : (d ?? ''); };
+  function cellsFor(op) {
+    if (!op.data) return [];
+    if (op.c === 'logs') {
+      const loc = map.cells[op.id]; if (!loc) return [];
+      const sets = (op.data.sets || []).filter(Boolean), check = { row: loc.exRow, col: loc.c0 + 1, value: loc.exercise };
+      const out = [['kg', 7], ['reps', 8], ['rpe', 9]].map(([f, o]) => ({ tab: loc.tab, row: loc.row, col: loc.c0 + o, value: join(sets.map(x => x[f])), check }));
+      if (/\.0$/.test(op.id)) out.push({ tab: loc.tab, row: loc.exRow, col: loc.c0 + 11, value: op.data.note || '', check });
+      return out;
+    }
+    if (op.c === 'sessions') {
+      const loc = map.sessCells[op.id]; if (!loc) return [];
+      return Object.entries(loc.rows).map(([k, row]) => ({ kind: 'session', tab: loc.tab, row, col: loc.c0 + 1, value: k === 'date' ? uk(op.data.date) : (op.data[k] ?? '') }));
+    }
+    return [];
+  }
+  return {
+    name: 'Google Sheet', readOnly: ['program', 'meta'],
+    async auth() { if (!url || !key) throw new Error('Not paired yet – open the phone link from the sheet (menu Training app → Phone link).'); return { user: 'Oliver', role: 'athlete' }; },
+    async load() {
+      const r = await fetch(`${url}?action=load&key=${encodeURIComponent(key)}`); const j = await r.json(); if (!j.ok) throw new Error(j.error);
+      const { parseWorkbook } = await import('./sheet-format.js');
+      const res = parseWorkbook(j.grids); map = { cells: res.cells, sessCells: res.sessCells };
+      this.problems = [...res.errors, ...res.warnings];
+      const docs = [];
+      res.blocks.forEach(b => docs.push({ collection: 'program', id: b.id, data: b }));
+      if (res.macrocycle.length) docs.push({ collection: 'meta', id: 'macrocycle', data: { weeks: res.macrocycle } });
+      const seen = new Set();
+      j.docs.forEach(d => { docs.push(d); seen.add(d.collection + '|' + d.id); });            // app data wins
+      Object.entries(res.logs).forEach(([id, data]) => { if (!seen.has('logs|' + id)) docs.push({ collection: 'logs', id, data }); });
+      Object.entries(res.sessions).forEach(([id, data]) => { if (!seen.has('sessions|' + id)) docs.push({ collection: 'sessions', id, data }); });
+      res.bodyweight.forEach(b => { if (!seen.has('bodyweight|' + b.date)) docs.push({ collection: 'bodyweight', id: b.date, data: b }); });
+      return docs;
+    },
+    async putMany(ops) {
+      const body = { key, ops: ops.filter(o => !this.readOnly.includes(o.c)).map(o => ({ c: o.c, id: o.id, data: o.data, cells: cellsFor(o) })) };
+      if (!body.ops.length) return;
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+      const j = await r.json(); if (!j.ok) throw new Error(j.error); if (j.warnings?.length) console.warn(j.warnings);
+    },
+    async put(c, id, data) { return this.putMany([{ c, id, data }]); },
+    async del(c, id) { return this.putMany([{ c, id, data: null }]); },
+  };
+}
+
+export function createStore(cfg) {
+  // one-time pairing link from the sheet: https://site/#pair=<execUrl>|<key>
+  const m = location.hash.match(/^#pair=([^|]+)\|(.+)$/);
+  if (m) { localStorage.setItem('ta.pair', JSON.stringify({ url: decodeURIComponent(m[1]), key: decodeURIComponent(m[2]) })); history.replaceState(null, '', location.pathname + '#/train'); }
+  const a = cfg.backend === 'sheets' ? sheetsAdapter(cfg.sheets || {}) : cfg.backend === 'supabase' ? supabaseAdapter(cfg.supabase) : cfg.backend === 'local' ? localAdapter : devAdapter;
+  return new Store(a);
+}
