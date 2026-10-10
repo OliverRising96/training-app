@@ -114,7 +114,8 @@ function supabaseAdapter(cfg) {
 // Google Sheet as the backend, via the Apps Script web app in backend/apps-script/Code.gs.
 // Programme + macrocycle are read from the coach's sheet; results are written into its green columns.
 function sheetsAdapter(cfg) {
-  const pair = JSON.parse(localStorage.getItem('ta.pair') || 'null') || {};
+  const pair = JSON.parse(localStorage.getItem('ta.pair') || (document.cookie.match(/(?:^|; )tapair=([^;]+)/) || [])[1] && decodeURIComponent(document.cookie.match(/(?:^|; )tapair=([^;]+)/)[1]) || 'null') || {};
+  if (pair.url) { localStorage.setItem('ta.pair', JSON.stringify(pair)); document.cookie = 'tapair=' + encodeURIComponent(JSON.stringify(pair)) + '; max-age=31536000; path=/; SameSite=Strict; Secure'; try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {} }
   const url = pair.url || cfg.url, key = pair.key || cfg.key;
   let map = { cells: {}, sessCells: {} };
   const join = a => { const v = a.filter(x => x != null && x !== ''); if (!v.length) return ''; return v.every(x => String(x) === String(v[0])) ? String(v[0]) : v.join(','); };
