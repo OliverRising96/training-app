@@ -122,6 +122,20 @@ function sheetsAdapter(cfg) {
   const uk = d => { const m = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}/${m[2]}/${m[1]}` : (d ?? ''); };
   function cellsFor(op) {
     if (!op.data) return [];
+    if (map.format === 'original') {
+      if (op.c === 'logs') {
+        const loc = map.cells[op.id]; if (!loc) return [];
+        const sets = (op.data.sets || []).filter(Boolean), check = { row: loc.exRow, col: loc.exCol, value: loc.exercise }, b = { book: 'original', tab: loc.tab, row: loc.row, check };
+        const out = [['kg', loc.kgCol], ['reps', loc.repsCol], ['rpe', loc.rpeCol]].map(([f, col]) => ({ ...b, col, value: join(sets.map(x => x[f])) }));
+        if (op.data.note) out.push({ ...b, col: loc.noteCol, value: op.data.note });
+        return out;
+      }
+      if (op.c === 'sessions') {
+        const loc = map.sessCells[op.id]; if (!loc) return [];
+        return Object.entries(loc.rows).map(([k, row]) => ({ book: 'original', kind: 'session', tab: loc.tab, row, col: loc.valueCol, value: op.data[k] ?? '', check: { row, col: loc.labelCol, value: loc.labels[k] } }));
+      }
+      return [];
+    }
     if (op.c === 'logs') {
       const loc = map.cells[op.id]; if (!loc) return [];
       const sets = (op.data.sets || []).filter(Boolean), check = { row: loc.exRow, col: loc.c0 + 1, value: loc.exercise };
@@ -140,9 +154,15 @@ function sheetsAdapter(cfg) {
     async auth() { if (!url || !key) throw new Error('Not paired yet – open the phone link from the sheet (menu Training app → Phone link).'); return { user: 'Oliver', role: 'athlete' }; },
     async load() {
       const r = await fetch(`${url}?action=load&key=${encodeURIComponent(key)}`); const j = await r.json(); if (!j.ok) throw new Error(j.error);
-      const { parseWorkbook } = await import('./sheet-format.js');
-      const res = parseWorkbook(j.grids); map = { cells: res.cells, sessCells: res.sessCells };
-      this.problems = [...res.errors, ...res.warnings];
+      const { parseWorkbook, parseOriginal } = await import('./sheet-format.js');
+      // The coach's original sheet is the source of truth when the script can reach it; else the bound copy.
+      let res = j.original ? parseOriginal(j.original) : null;
+      const useOrig = !!(res && !res.errors.length && res.blocks.length);
+      if (!useOrig) res = parseWorkbook(j.grids);
+      map = { cells: res.cells, sessCells: res.sessCells, format: useOrig ? 'original' : 'template' };
+      this.source = useOrig ? 'original' : 'copy';
+      this.problems = [...res.errors, ...res.warnings, ...(j.originalError ? ['Original sheet unavailable: ' + j.originalError] : [])];
+      j.docs.forEach(d => { if (d.collection === 'bodyweight' && d.data?.date) d.id = d.data.date; });   // old ids could be date-mangled
       const docs = [];
       res.blocks.forEach(b => docs.push({ collection: 'program', id: b.id, data: b }));
       if (res.macrocycle.length) docs.push({ collection: 'meta', id: 'macrocycle', data: { weeks: res.macrocycle } });
@@ -151,10 +171,20 @@ function sheetsAdapter(cfg) {
       Object.entries(res.logs).forEach(([id, data]) => { if (!seen.has('logs|' + id)) docs.push({ collection: 'logs', id, data }); });
       Object.entries(res.sessions).forEach(([id, data]) => { if (!seen.has('sessions|' + id)) docs.push({ collection: 'sessions', id, data }); });
       res.bodyweight.forEach(b => { if (!seen.has('bodyweight|' + b.date)) docs.push({ collection: 'bodyweight', id: b.date, data: b }); });
+      if (useOrig) {
+        // Self-healing carry-over: anything saved in the app that the original sheet doesn't show yet is mirrored
+        // into it (guarded server-side; blanks never clear cells). Runs in the background on every open.
+        const bw = new Set(res.bodyweight.map(b => b.date)), sessHas = id => Object.keys(res.sessions[id] || {}).length;
+        const ops = j.docs.filter(d => d.data && (
+          (d.collection === 'logs' && map.cells[d.id] && !map.cells[d.id].hasData && (d.data.sets || []).some(Boolean)) ||
+          (d.collection === 'sessions' && map.sessCells[d.id] && !sessHas(d.id)) ||
+          (d.collection === 'bodyweight' && d.data.kg != null && !bw.has(d.data.date)))).map(d => ({ c: d.collection, id: d.id, data: d.data }));
+        if (ops.length) this.putMany(ops).then(() => console.info('mirrored', ops.length, 'saved entries into the original sheet')).catch(e => console.warn('mirror later:', e.message));
+      }
       return docs;
     },
     async putMany(ops) {
-      const body = { key, ops: ops.filter(o => !this.readOnly.includes(o.c)).map(o => ({ c: o.c, id: o.id, data: o.data, cells: cellsFor(o) })) };
+      const body = { key, ops: ops.filter(o => !this.readOnly.includes(o.c)).map(o => ({ c: o.c, id: o.id, data: o.data, cells: cellsFor(o), ...(map.format === 'original' ? { book: 'original' } : {}) })) };
       if (!body.ops.length) return;
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
       const j = await r.json(); if (!j.ok) throw new Error(j.error); if (j.warnings?.length) console.warn(j.warnings);
