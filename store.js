@@ -37,10 +37,33 @@ class Store {
       const docs = await this.adapter.load();
       const s = emptyState();
       docs.forEach(d => { if (s[d.collection]) s[d.collection][d.id] = d.data; });
-      // re-apply unsynced local writes on top
+      // Never wipe a good local programme if the backend returned nothing useful
+      if (!Object.keys(s.program).length && Object.keys(this.state.program || {}).length) {
+        s.program = { ...this.state.program };
+        if (!Object.keys(s.meta).length) s.meta = { ...this.state.meta };
+        this.source = this.source || 'cache';
+        this.problems = [...(this.problems || []), 'Backend returned no programme – kept last cached plan.'];
+      }
+      // re-apply unsynced local writes on top (logs/sessions/bw never lost)
       this.queue.forEach(q => { if (q.data === null) delete s[q.c][q.id]; else s[q.c][q.id] = q.data; });
       this.state = s; this.online = true;
-    } catch (e) { this.online = false; console.warn('offline – using cache', e); }
+    } catch (e) {
+      this.online = false;
+      console.warn('offline – using cache', e);
+      this.problems = [...(this.problems || []), 'Backend unreachable: ' + (e && e.message || e)];
+      // First launch / empty cache: seed programme from bundled snapshot so Train is never blank
+      if (!Object.keys(this.state.program || {}).length) {
+        try {
+          const fb = await fetch('programme-fallback.json', { cache: 'no-cache' });
+          if (fb.ok) {
+            const docs = await fb.json();
+            docs.forEach(d => { if (this.state[d.collection]) this.state[d.collection][d.id] = d.data; });
+            this.source = 'fallback';
+            this.problems = [...(this.problems || []), 'Showing bundled programme (re-pair from sheet menu to sync live).'];
+          }
+        } catch (e2) { console.warn('fallback failed', e2); }
+      }
+    }
     this.persist(); this.emit();
   }
   put(c, id, data) { this.state[c][id] = data; this.enqueue({ c, id, data }); }
@@ -153,15 +176,39 @@ function sheetsAdapter(cfg) {
     name: 'Google Sheet', readOnly: ['program', 'meta'],
     async auth() { if (!url || !key) throw new Error('Not paired yet – open the phone link from the sheet (menu Training app → Phone link).'); return { user: 'Oliver', role: 'athlete' }; },
     async load() {
-      const r = await fetch(`${url}?action=load&key=${encodeURIComponent(key)}`); const j = await r.json(); if (!j.ok) throw new Error(j.error);
+      const r = await fetch(`${url}?action=load&key=${encodeURIComponent(key)}`);
+      const ct = (r.headers.get('content-type') || '').toLowerCase();
+      const text = await r.text();
+      if (!r.ok) throw new Error(`Backend HTTP ${r.status} (redeploy Apps Script / re-pair from sheet menu)`);
+      if (!ct.includes('json') && text.trim()[0] !== '{') throw new Error('Backend returned non-JSON (deployment missing or wrong URL)');
+      let j; try { j = JSON.parse(text); } catch (e) { throw new Error('Backend JSON parse failed'); }
+      if (!j.ok) throw new Error(j.error || 'bad key');
       const { parseWorkbook, parseOriginal } = await import('./sheet-format.js');
       // The coach's original sheet is the source of truth when the script can reach it; else the bound copy.
-      let res = j.original ? parseOriginal(j.original) : null;
-      const useOrig = !!(res && !res.errors.length && res.blocks.length);
-      if (!useOrig) res = parseWorkbook(j.grids);
+      // Soft-parse: ignore empty/new Block tabs; prefer original even if it only has warnings.
+      let res = (j.original && Object.keys(j.original).length) ? parseOriginal(j.original) : null;
+      let useOrig = !!(res && res.blocks.length);
+      if (!useOrig) {
+        res = parseWorkbook(j.grids || {});
+        useOrig = false;
+      }
+      if (!res.blocks.length) {
+        // Last resort: bundled snapshot so the athlete can still train
+        const fb = await fetch('programme-fallback.json', { cache: 'no-cache' });
+        if (fb.ok) {
+          const docs = await fb.json();
+          this.source = 'fallback';
+          this.problems = ['Sheet parse empty – using bundled programme. Re-pair from Training app → Phone link if sync is needed.', ...(res.errors || []), ...(res.warnings || [])];
+          map = { cells: {}, sessCells: {}, format: 'fallback' };
+          const out = docs.slice();
+          (j.docs || []).forEach(d => out.push(d));
+          return out;
+        }
+        throw new Error('No programme in sheet response');
+      }
       map = { cells: res.cells, sessCells: res.sessCells, format: useOrig ? 'original' : 'template' };
       this.source = useOrig ? 'original' : 'copy';
-      this.problems = [...res.errors, ...res.warnings, ...(j.originalError ? ['Original sheet unavailable: ' + j.originalError] : [])];
+      this.problems = [...(res.errors || []), ...(res.warnings || []), ...(j.originalError ? ['Original sheet unavailable: ' + j.originalError] : [])];
       j.docs.forEach(d => { if (d.collection === 'bodyweight' && d.data?.date) d.id = d.data.date; });   // old ids could be date-mangled
       const docs = [];
       res.blocks.forEach(b => docs.push({ collection: 'program', id: b.id, data: b }));

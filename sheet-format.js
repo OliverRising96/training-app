@@ -197,10 +197,12 @@ export function parseOriginal(sheets, year = 2026) {
       if (day.items.length) wk.days[dn] = day;
     }
     block.weeks = Object.values(weeks).sort((a, b) => a.n - b.n).map(w => ({ ...w, days: Object.values(w.days).sort((a, b) => a.n - b.n) })).filter(w => w.days.length);
+    // Skip empty/new placeholder Block tabs (e.g. Block 5 stub) instead of failing the whole load
+    if (!block.weeks.length) { out.warnings.push(`${name}: no days with exercises yet – skipped.`); continue; }
     out.blocks.push(block);
   }
   out.blocks.sort((a, b) => a.number - b.number);
-  if (!out.blocks.length) out.errors.push('No "Block N" tabs found in the original sheet.');
+  if (!out.blocks.length) out.errors.push('No "Block N" tabs with programme data found in the original sheet.');
   const bw = sheets['Bodyweight Tracker'] || sheets['Bodyweight'];
   if (bw) bw.forEach(r => { const d = anyDate(r[1]), kg = numOrText(r[2]); if (d && typeof kg === 'number') out.bodyweight.push({ date: d, kg }); });
   return out;

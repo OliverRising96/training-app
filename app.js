@@ -74,7 +74,14 @@ function dayStatus(d) {
 function currentSel() {
   const bs = blocks(); if (!bs.length) return null;
   if (ui.sel && bs.find(b => b.id === ui.sel.b)?.weeks.find(w => w.n === ui.sel.w)) return ui.sel;
-  // latest week with any logging; jump forward if it's complete
+  // Prefer the macrocycle week that contains today (e.g. w/c 12 Oct → Block 4 Week 4)
+  const mc = store.get('meta', 'macrocycle')?.weeks || [], t = today();
+  const cur = mc.find(w => w.block && w.week && t >= w.wc && t < new Date(new Date(w.wc + 'T12:00').getTime() + 7 * 864e5).toISOString().slice(0, 10));
+  if (cur) {
+    const b = bs.find(x => x.number === cur.block || x.id === `b${cur.block}`);
+    if (b?.weeks.find(w => w.n === cur.week)) return { b: b.id, w: cur.week };
+  }
+  // fallback: latest week with any logging; jump forward if it's complete
   const weeks = []; bs.forEach(b => b.weeks.forEach(w => weeks.push({ b, w })));
   let idx = weeks.length - 1;
   for (let i = weeks.length - 1; i >= 0; i--) if (weeks[i].w.days.some(d => dayStatus(d).done)) { idx = i; break; }
@@ -160,10 +167,15 @@ function weekPicker(sel, base) {
 }
 
 function viewTrain() {
-  const sel = currentSel(); if (!sel) return header('Train') + '<p class="pad muted">No programme yet – your coach adds it.</p>' + tabs('#/train');
+  const sel = currentSel(); if (!sel) return header('Train') + '<p class="pad muted">No programme yet – your coach adds it.</p><p class="pad muted">If this persists: open Training Log sheet → menu <b>Training app → Phone link</b> and open that link once.</p>' + tabs('#/train');
   const b = blocks().find(x => x.id === sel.b), w = b.weeks.find(x => x.n === sel.w);
   const next = upcomingMoment();
+  const src = store.source || (store.online ? 'live' : 'cache');
+  const banner = (!store.online || src === 'fallback' || src === 'cache')
+    ? `<div class="moment" style="background:#3a2a00">Offline / cached plan (${esc(src)}). Logs stay on this phone. Re-pair via sheet menu → Phone link to sync.</div>`
+    : '';
   return header('Train') + `<main>
+    ${banner}
     ${next ? `<div class="moment">${esc(next.moment)} <span>${next.days === 0 ? 'this week' : `· week of ${esc(niceDate(next.wc))}`}</span></div>` : ''}
     ${weekPicker(sel)}
     ${w.days.map(d => { const s = dayStatus(d), sess = store.get('sessions', d.id);
