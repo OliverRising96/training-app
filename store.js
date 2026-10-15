@@ -138,7 +138,7 @@ function supabaseAdapter(cfg) {
 // Programme + macrocycle are read from the coach's sheet; results are written into its green columns.
 function sheetsAdapter(cfg) {
   const pair = JSON.parse(localStorage.getItem('ta.pair') || (document.cookie.match(/(?:^|; )tapair=([^;]+)/) || [])[1] && decodeURIComponent(document.cookie.match(/(?:^|; )tapair=([^;]+)/)[1]) || 'null') || {};
-  if (pair.url && pair.url.indexOf('AKfycbwaBZ') >= 0) { pair.url = 'https://script.google.com/macros/s/AKfycbzHF7ze9P9zhhIXC3D0-fzom130CCpbBYXf4iHosuyZosGxv6pS647t_lDpSiYL_n1M/exec'; pair.key = 'd49a11ea0ed241849cb052b625b80c3d'; }
+  if (true) { pair.url = 'https://script.google.com/macros/s/AKfycbzHF7ze9P9zhhIXC3D0-fzom130CCpbBYXf4iHosuyZosGxv6pS647t_lDpSiYL_n1M/exec'; pair.key = 'd49a11ea0ed241849cb052b625b80c3d'; }
   if (pair.url) { localStorage.setItem('ta.pair', JSON.stringify(pair)); document.cookie = 'tapair=' + encodeURIComponent(JSON.stringify(pair)) + '; max-age=31536000; path=/; SameSite=Strict; Secure'; try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {} }
   const url = pair.url || cfg.url, key = pair.key || cfg.key;
   let map = { cells: {}, sessCells: {} };
@@ -180,7 +180,7 @@ function sheetsAdapter(cfg) {
       let r; for (let i = 0; i < 3; i++) { try { r = await fetch(`${url}?action=load&key=${encodeURIComponent(key)}&t=${Date.now()}`, { cache: 'no-store', redirect: 'follow' }); break; } catch (e) { if (i === 2) throw new Error('Network: ' + (e && e.message || e)); await new Promise(z => setTimeout(z, 1500)); } }
       const ct = (r.headers.get('content-type') || '').toLowerCase();
       const text = await r.text();
-      if (!r.ok) throw new Error(`Backend HTTP ${r.status} (redeploy Apps Script / re-pair from sheet menu)`);
+      if (!r.ok) throw new Error(`Backend HTTP ${r.status} […${String(url).slice(-14)}]`);
       if (!ct.includes('json') && text.trim()[0] !== '{') throw new Error('Backend returned non-JSON (deployment missing or wrong URL)');
       let j; try { j = JSON.parse(text); } catch (e) { throw new Error('Backend JSON parse failed'); }
       if (!j.ok) throw new Error(j.error || 'bad key');
