@@ -176,7 +176,7 @@ function sheetsAdapter(cfg) {
     name: 'Google Sheet', readOnly: ['program', 'meta'],
     async auth() { if (!url || !key) throw new Error('Not paired yet – open the phone link from the sheet (menu Training app → Phone link).'); return { user: 'Oliver', role: 'athlete' }; },
     async load() {
-      const r = await fetch(`${url}?action=load&key=${encodeURIComponent(key)}`);
+      let r; for (let i = 0; i < 3; i++) { try { r = await fetch(`${url}?action=load&key=${encodeURIComponent(key)}&t=${Date.now()}`, { cache: 'no-store', redirect: 'follow' }); break; } catch (e) { if (i === 2) throw new Error('Network: ' + (e && e.message || e)); await new Promise(z => setTimeout(z, 1500)); } }
       const ct = (r.headers.get('content-type') || '').toLowerCase();
       const text = await r.text();
       if (!r.ok) throw new Error(`Backend HTTP ${r.status} (redeploy Apps Script / re-pair from sheet menu)`);

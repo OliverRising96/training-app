@@ -346,7 +346,7 @@ function viewSettings() {
     ${ui.locked ? `<div class="card"><b>Signed in</b><p class="muted">${esc(store.user)} · ${esc(ui.role)}</p></div>` : `<div class="card"><b>Viewing as</b><div class="seg"><button data-role="athlete" class="${ui.role === 'athlete' ? 'on' : ''}">Athlete (Oliver)</button><button data-role="coach" class="${ui.role === 'coach' ? 'on' : ''}">Coach</button></div>
       <small class="muted">Prototype switch. Once live, the role comes from each person's login.</small></div>`}
     <a class="card row" href="#/plan"><b class="grow">Macrocycle plan</b><span class="chev">›</span></a>
-    <div class="card"><b>Sync</b><p class="muted">Backend: ${esc(cfg.backend)} · ${store.online ? 'online' : 'offline'} · ${store.pending} change(s) waiting</p>
+    <div class="card"><b>Sync</b><p class="muted">Backend: ${esc(cfg.backend)} · ${store.online ? 'online' : 'offline'} · ${store.pending} change(s) waiting</p>${(store.problems||[]).length ? `<p class="muted" style="color:#e0a040;font-size:13px;word-break:break-word">${esc(store.problems.join(' · '))}</p>` : ''}
       <button class="sm" data-refresh>Sync now</button> ${cfg.backend === 'dev' ? '<button class="sm danger" data-reset>Reset demo data</button>' : ''}</div>
     <div class="card"><b>Install on your phone</b><p class="muted">iPhone: open in Safari → Share → “Add to Home Screen”. Android: Chrome menu → “Install app”.</p></div>
   </main>` + tabs('#/settings');
