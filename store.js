@@ -138,6 +138,7 @@ function supabaseAdapter(cfg) {
 // Programme + macrocycle are read from the coach's sheet; results are written into its green columns.
 function sheetsAdapter(cfg) {
   const pair = JSON.parse(localStorage.getItem('ta.pair') || (document.cookie.match(/(?:^|; )tapair=([^;]+)/) || [])[1] && decodeURIComponent(document.cookie.match(/(?:^|; )tapair=([^;]+)/)[1]) || 'null') || {};
+  if (pair.url && pair.url.indexOf('AKfycbwaBZ') >= 0) { pair.url = 'https://script.google.com/macros/s/AKfycbzHF7ze9P9zhhIXC3D0-fzom130CCpbBYXf4iHosuyZosGxv6pS647t_lDpSiYL_n1M/exec'; pair.key = 'd49a11ea0ed241849cb052b625b80c3d'; }
   if (pair.url) { localStorage.setItem('ta.pair', JSON.stringify(pair)); document.cookie = 'tapair=' + encodeURIComponent(JSON.stringify(pair)) + '; max-age=31536000; path=/; SameSite=Strict; Secure'; try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {} }
   const url = pair.url || cfg.url, key = pair.key || cfg.key;
   let map = { cells: {}, sessCells: {} };
@@ -244,7 +245,7 @@ function sheetsAdapter(cfg) {
 export function createStore(cfg) {
   // one-time pairing link from the sheet: https://site/#pair=<execUrl>|<key>
   const m = decodeURIComponent(location.hash).match(/^#pair=([^|]+)\|(.+)$/);
-  if (m) { localStorage.setItem('ta.pair', JSON.stringify({ url: m[1], key: m[2] })); history.replaceState(null, '', location.pathname + '#/train'); }
+  if (m) { localStorage.setItem('ta.pair', JSON.stringify({ url: m[1], key: m[2] })); document.cookie = 'tapair=' + encodeURIComponent(JSON.stringify({ url: m[1], key: m[2] })) + '; max-age=31536000; path=/; SameSite=Strict; Secure'; history.replaceState(null, '', location.pathname + '#/train'); }
   const a = cfg.backend === 'sheets' ? sheetsAdapter(cfg.sheets || {}) : cfg.backend === 'supabase' ? supabaseAdapter(cfg.supabase) : cfg.backend === 'local' ? localAdapter : devAdapter;
   return new Store(a);
 }
