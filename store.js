@@ -52,13 +52,22 @@ class Store {
       console.warn('offline – using cache', e);
       this.problems = [...(this.problems || []), 'Backend unreachable: ' + (e && e.message || e)];
       // First launch / empty cache: seed programme from bundled snapshot so Train is never blank
-      if (!Object.keys(this.state.program || {}).length) {
+      // Also merges newer bundled snapshots: adds new blocks, refreshes the macrocycle; never touches logs or existing blocks.
+      {
+        const empty = !Object.keys(this.state.program || {}).length;
         try {
           const fb = await fetch('programme-fallback.json', { cache: 'no-cache' });
           if (fb.ok) {
             const docs = await fb.json();
-            docs.forEach(d => { if (this.state[d.collection]) this.state[d.collection][d.id] = d.data; });
-            this.source = 'fallback';
+            const fbAt = docs.find(d => d.collection === 'meta' && d.id === 'fallback')?.data?.at || '';
+            const haveAt = this.state.meta?.fallback?.at || '';
+            const haveNums = new Set(Object.values(this.state.program || {}).map(b => b.number));
+            if (empty || fbAt > haveAt) docs.forEach(d => {
+              if (!this.state[d.collection]) return;
+              if (d.collection === 'program' && !empty && (this.state.program[d.id] || haveNums.has(d.data.number))) return;
+              this.state[d.collection][d.id] = d.data;
+            });
+            if (empty || fbAt > haveAt) this.source = 'fallback';
             this.problems = [...(this.problems || []), 'Showing bundled programme (re-pair from sheet menu to sync live).'];
           }
         } catch (e2) { console.warn('fallback failed', e2); }
